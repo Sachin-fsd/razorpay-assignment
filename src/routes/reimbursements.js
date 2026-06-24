@@ -1,16 +1,10 @@
 const express = require('express');
 const pool = require('../db');
 const { authenticate } = require('../middleware/authenticate');
+const { errorResponse } = require('../utils/responses');
 
 const router = express.Router();
 const APPROVAL_STATUSES = new Set(['APPROVED', 'REJECTED']);
-
-function errorResponse(res, statusCode, message) {
-  return res.status(statusCode).json({
-    status: 'error',
-    message
-  });
-}
 
 function normalizeRole(role) {
   return typeof role === 'string' ? role.toUpperCase() : '';
@@ -25,13 +19,160 @@ function mapReimbursement(row) {
   };
 }
 
-async function isSubordinate(empId, rmId) {
+async function getEmployee(userId) {
   const result = await pool.query(
-    'SELECT 1 FROM users WHERE id = $1 AND rm_id = $2 LIMIT 1',
-    [empId, rmId]
+    'SELECT id, role, rm_id FROM users WHERE id = $1',
+    [userId]
+  );
+
+  return result.rows[0];
+}
+
+async function ensureTargetEmployee(res, userId) {
+  const employee = await getEmployee(userId);
+
+  if (!employee) {
+    errorResponse(res, 404, 'Target user not found');
+    return null;
+  }
+
+  if (normalizeRole(employee.role) !== 'EMP') {
+    errorResponse(res, 400, 'Target user must have role EMP');
+    return null;
+  }
+
+  return employee;
+}
+
+function canActOnEmployee(role, callerId, employee) {
+  if (role === 'RM') {
+    return employee.rm_id === callerId;
+  }
+
+  return role === 'APE' || role === 'CFO';
+}
+
+async function hasPendingReimbursement(userId) {
+  const result = await pool.query(
+    `
+      SELECT 1
+      FROM reimbursements
+      WHERE emp_id = $1
+        AND status = $2
+      LIMIT 1
+    `,
+    [userId, 'PENDING']
   );
 
   return result.rowCount > 0;
+}
+
+async function updateReimbursementsForDecision(userId, status, role) {
+  const rmApproval = role === 'RM' || role === 'CFO';
+  const apeApproval = role === 'APE' || role === 'CFO';
+
+  if (status === 'REJECTED') {
+    return pool.query(
+      `
+        UPDATE reimbursements
+        SET status = $1
+        WHERE emp_id = $2
+          AND status = $3
+        RETURNING title, description, amount, status
+      `,
+      ['REJECTED', userId, 'PENDING']
+    );
+  }
+
+  return pool.query(
+    `
+      UPDATE reimbursements
+      SET
+        rm_approved = CASE WHEN $1::boolean THEN true ELSE rm_approved END,
+        ape_approved = CASE WHEN $2::boolean THEN true ELSE ape_approved END,
+        status = CASE
+          WHEN (CASE WHEN $1::boolean THEN true ELSE rm_approved END) = true
+            AND (CASE WHEN $2::boolean THEN true ELSE ape_approved END) = true
+          THEN $3
+          ELSE $4
+        END
+      WHERE emp_id = $5
+        AND status = $4
+      RETURNING title, description, amount, status
+    `,
+    [rmApproval, apeApproval, 'APPROVED', 'PENDING', userId]
+  );
+}
+
+async function listVisibleReimbursements(role, userId) {
+  if (role === 'EMP') {
+    return pool.query(
+      `
+        SELECT title, description, amount, status
+        FROM reimbursements
+        WHERE emp_id = $1
+        ORDER BY created_at DESC
+      `,
+      [userId]
+    );
+  }
+
+  if (role === 'RM') {
+    return pool.query(
+      `
+        SELECT r.title, r.description, r.amount, r.status
+        FROM reimbursements r
+        JOIN users u ON u.id = r.emp_id
+        WHERE u.rm_id = $1
+          AND u.role = $2
+          AND r.status = $3
+          AND r.rm_approved = false
+        ORDER BY r.created_at DESC
+      `,
+      [userId, 'EMP', 'PENDING']
+    );
+  }
+
+  if (role === 'APE') {
+    return pool.query(
+      `
+        SELECT title, description, amount, status
+        FROM reimbursements
+        WHERE rm_approved = true
+          AND ape_approved = false
+          AND status = $1
+        ORDER BY created_at DESC
+      `,
+      ['PENDING']
+    );
+  }
+
+  if (role === 'CFO') {
+    return pool.query(
+      `
+        SELECT title, description, amount, status
+        FROM reimbursements
+        WHERE ape_approved = true
+        ORDER BY created_at DESC
+      `
+    );
+  }
+
+  return null;
+}
+
+async function getAllReimbursementsForUser(userId) {
+  const result = await pool.query(
+    `
+      SELECT title, description, amount, status
+      FROM reimbursements
+      WHERE emp_id = $1
+      ORDER BY created_at DESC
+    `,
+    [userId]
+  );
+
+  return result.rows.map(mapReimbursement);
 }
 
 router.use(authenticate);
@@ -65,10 +206,10 @@ router.post('/', async (req, res, next) => {
           rm_approved,
           ape_approved
         )
-        VALUES ($1, $2, $3, $4, 'PENDING', false, false)
+        VALUES ($1, $2, $3, $4, $5, false, false)
         RETURNING title, description, amount, status
       `,
-      [req.user.userId, title, description, numericAmount]
+      [req.user.userId, title, description, numericAmount, 'PENDING']
     );
 
     return res.status(201).json({
@@ -99,56 +240,33 @@ router.patch('/', async (req, res, next) => {
     return errorResponse(res, 400, 'Status must be APPROVED or REJECTED');
   }
 
+  if (!['RM', 'APE', 'CFO'].includes(role)) {
+    return errorResponse(res, 403, 'User role cannot approve or reject reimbursements');
+  }
+
   try {
-    if (role === 'RM' && !(await isSubordinate(userId, req.user.userId))) {
-      return errorResponse(res, 403, 'RM users can only act on subordinate reimbursements');
+    const employee = await ensureTargetEmployee(res, userId);
+
+    if (!employee) {
+      return null;
     }
 
-    if (!['RM', 'APE', 'CFO'].includes(role)) {
-      return errorResponse(res, 403, 'User role cannot approve or reject reimbursements');
+    if (!canActOnEmployee(role, req.user.userId, employee)) {
+      return errorResponse(res, 403, 'Caller does not have authority over this reimbursement');
     }
 
-    let result;
-
-    if (normalizedStatus === 'REJECTED') {
-      result = await pool.query(
-        `
-          UPDATE reimbursements
-          SET status = 'REJECTED'
-          WHERE emp_id = $1
-            AND status = 'PENDING'
-          RETURNING title, description, amount, status
-        `,
-        [userId]
-      );
-    } else {
-      const rmApprovedExpression =
-        role === 'RM' || role === 'CFO' ? 'true' : 'rm_approved';
-      const apeApprovedExpression =
-        role === 'APE' || role === 'CFO' ? 'true' : 'ape_approved';
-
-      result = await pool.query(
-        `
-          UPDATE reimbursements
-          SET
-            rm_approved = ${rmApprovedExpression},
-            ape_approved = ${apeApprovedExpression},
-            status = CASE
-              WHEN ${rmApprovedExpression} = true
-                AND ${apeApprovedExpression} = true
-              THEN 'APPROVED'
-              ELSE 'PENDING'
-            END
-          WHERE emp_id = $1
-            AND status = 'PENDING'
-          RETURNING title, description, amount, status
-        `,
-        [userId]
-      );
+    if (!(await hasPendingReimbursement(userId))) {
+      return errorResponse(res, 404, 'Pending reimbursement not found for this user');
     }
+
+    const result = await updateReimbursementsForDecision(
+      userId,
+      normalizedStatus,
+      role
+    );
 
     if (result.rowCount === 0) {
-      return errorResponse(res, 404, 'No pending reimbursements found for this user');
+      return errorResponse(res, 404, 'Pending reimbursement not found for this user');
     }
 
     return res.json({
@@ -166,52 +284,9 @@ router.get('/', async (req, res, next) => {
   const role = normalizeRole(req.user.role);
 
   try {
-    let result;
+    const result = await listVisibleReimbursements(role, req.user.userId);
 
-    if (role === 'EMP') {
-      result = await pool.query(
-        `
-          SELECT title, description, amount, status
-          FROM reimbursements
-          WHERE emp_id = $1
-          ORDER BY created_at DESC
-        `,
-        [req.user.userId]
-      );
-    } else if (role === 'RM') {
-      result = await pool.query(
-        `
-          SELECT r.title, r.description, r.amount, r.status
-          FROM reimbursements r
-          JOIN users u ON u.id = r.emp_id
-          WHERE u.rm_id = $1
-            AND r.status = 'PENDING'
-            AND r.rm_approved = false
-          ORDER BY r.created_at DESC
-        `,
-        [req.user.userId]
-      );
-    } else if (role === 'APE') {
-      result = await pool.query(
-        `
-          SELECT title, description, amount, status
-          FROM reimbursements
-          WHERE rm_approved = true
-            AND ape_approved = false
-            AND status = 'PENDING'
-          ORDER BY created_at DESC
-        `
-      );
-    } else if (role === 'CFO') {
-      result = await pool.query(
-        `
-          SELECT title, description, amount, status
-          FROM reimbursements
-          WHERE ape_approved = true
-          ORDER BY created_at DESC
-        `
-      );
-    } else {
+    if (!result) {
       return errorResponse(res, 403, 'User role cannot view reimbursements');
     }
 
@@ -219,6 +294,38 @@ router.get('/', async (req, res, next) => {
       status: 'success',
       data: {
         reimbursements: result.rows.map(mapReimbursement)
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/:userId', async (req, res, next) => {
+  const role = normalizeRole(req.user.role);
+  const { userId } = req.params;
+
+  if (!['RM', 'APE', 'CFO'].includes(role)) {
+    return errorResponse(res, 403, 'Only RM, APE, or CFO users can view another employee reimbursements');
+  }
+
+  try {
+    const employee = await ensureTargetEmployee(res, userId);
+
+    if (!employee) {
+      return null;
+    }
+
+    if (role === 'RM' && !canActOnEmployee(role, req.user.userId, employee)) {
+      return errorResponse(res, 403, 'RM users can only view subordinate reimbursements');
+    }
+
+    const reimbursements = await getAllReimbursementsForUser(userId);
+
+    return res.json({
+      status: 'success',
+      data: {
+        reimbursements
       }
     });
   } catch (error) {

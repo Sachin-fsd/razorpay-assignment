@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Express.js reimbursements backend",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=20.10.2"
+  },
   "scripts": {
     "dev": "nodemon src/index.js",
     "db:migrate": "node scripts/migrate.js",

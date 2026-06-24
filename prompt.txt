@@ -17,8 +17,11 @@ POST /logout (clears the auth cookie).
 Create an authenticate middleware that reads the JWT from the cookie and attaches user to req. 
 All response errors should return appropriate HTTP status codes with a JSON body containing a 'status: error' field and a message.
 
+---------Promt3----------------------
 
----------Promt3-------------------
+Implement the following protected endpoints. Use the authenticate middleware from before, and create a requireRole(...roles) middleware for authorization. (1) POST /rest/roles/assign — CFO only; body: {userId, role}; updates the user's role in DB. (2) GET /rest/employees — role-based visibility: RM sees only EMPs where rm_id = their own id; APE sees all users with role EMP or RM; CFO sees all users. EMP gets 403. Response shape: {status:'success', data:{users:[{userId, name, email, role}]}}. (3) POST /rest/employees/assign — CFO only; body: {empId (the EMP's userId), rmId (the RM's userId)}; validates empId has role EMP and rmId has role RM; sets emp's rm_id = rmId. (4) DELETE /rest/employees/assign — CFO only; same body; sets emp's rm_id = null.
+
+---------Promt4-------------------
 
 Implement the following protected endpoints. 
 Use the authenticate middleware from before, and create a requireRole(...roles) middleware for authorization. 
@@ -26,3 +29,16 @@ Use the authenticate middleware from before, and create a requireRole(...roles) 
 (2) GET /rest/employees — role-based visibility: RM sees only EMPs where rm_id = their own id; APE sees all users with role EMP or RM; CFO sees all users. EMP gets 403. Response shape: {status:'success', data:{users:[{userId, name, email, role}]}}. 
 (3) POST /rest/employees/assign — CFO only; body: {empId (the EMP's userId), rmId (the RM's userId)}; validates empId has role EMP and rmId has role RM; sets emp's rm_id = rmId. 
 (4) DELETE /rest/employees/assign — CFO only; same body; sets emp's rm_id = null.
+
+--------------Promt5-----------------
+
+Audit the entire codebase for edge cases and harden it. Ensure: 
+(1) Registering with a duplicate email returns 409. 
+(2) Login with wrong password or non-existent email returns 401. 
+(3) Accessing protected endpoints without a cookie returns 401. 
+(4) Role-based endpoints return 403 (not 404) when the role doesn't have access. 
+(5) POST /rest/employees/assign should fail if the target user isn't actually an EMP or the second user isn't actually an RM. 
+(6) PATCH /rest/reimbursements should fail if the reimbursement doesn't exist or the caller doesn't have authority over it. 
+(7) GET /rest/reimbursements/<user-id> — only RM or APE/CFO can call this; validates the target user is an EMP and is the caller's subordinate (for RM: rm_id must match; for APE/CFO: always allowed). Returns that user's full reimbursement list. 
+(8) Add a global error handler in Express. 
+(9) Make sure all db queries use parameterized inputs (no SQL injection risk). Also create a prompt-logs.txt in the root and document this build process.

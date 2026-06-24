@@ -1,0 +1,15 @@
+Build process prompt log
+
+1. Read prompt.txt and set up an Express.js JavaScript backend for reimbursements on port 7002 with PostgreSQL via DATABASE_URL, migrations for users and reimbursements, a CFO seed script, and package scripts for dev, db:migrate, and db:seed-data.
+
+2. Add cookie-based authentication under /rest/onboardings with register, login, and logout endpoints. Enforce @org.com emails, hash passwords with bcrypt, issue an httpOnly JWT cookie, and add authenticate middleware.
+
+3. Implement reimbursement endpoints under /rest/reimbursements with role-based creation, approval, rejection, and listing behavior for EMP, RM, APE, and CFO users.
+
+4. Read the Razorpay hiring assignment PDF and compare the current backend against the assessment requirements, including missing role, employee, and user-specific reimbursement endpoints.
+
+5. Audit the entire codebase for edge cases and harden it: duplicate registration, login failures, missing cookie authentication, role-based 403 responses, employee assignment validation, reimbursement authority checks, GET /rest/reimbursements/:userId, global error handling, parameterized database queries, and this prompt-logs.txt file.
+
+6. Implement protected role and employee endpoints using the existing authenticate middleware and a new requireRole(...roles) authorization middleware. Align POST and DELETE /rest/employees/assign to body {empId, rmId}.
+
+7. Audit route alignment against the assignment document and remove any setup drift that could stop the tester from running the app with only the documented DATABASE_URL.

@@ -3,19 +3,14 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const { AUTH_COOKIE_NAME } = require('../middleware/authenticate');
+const { errorResponse } = require('../utils/responses');
+const { JWT_SECRET } = require('../config/auth');
 
 const router = express.Router();
 const ORG_EMAIL_PATTERN = /^[^\s@]+@org\.com$/i;
 
 function isOrgEmail(email) {
   return typeof email === 'string' && ORG_EMAIL_PATTERN.test(email.trim());
-}
-
-function errorResponse(res, statusCode, message) {
-  return res.status(statusCode).json({
-    status: 'error',
-    message
-  });
 }
 
 function getCookieOptions() {
@@ -95,7 +90,7 @@ router.post('/login', async (req, res, next) => {
         userId: user.id,
         role: user.role
       },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: '1d' }
     );
 
