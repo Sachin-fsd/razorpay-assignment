@@ -2,6 +2,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const pool = require('./db');
 const onboardingsRouter = require('./routes/onboardings');
+const reimbursementsRouter = require('./routes/reimbursements');
 
 require('dotenv').config();
 
@@ -16,6 +17,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use('/rest/onboardings', onboardingsRouter);
+app.use('/rest/reimbursements', reimbursementsRouter);
 
 app.get('/health', async (_req, res, next) => {
   try {
