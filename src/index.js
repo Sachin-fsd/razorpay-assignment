@@ -1,12 +1,21 @@
 const express = require('express');
+const cookieParser = require('cookie-parser');
 const pool = require('./db');
+const onboardingsRouter = require('./routes/onboardings');
 
 require('dotenv').config();
+
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET env variable is required');
+}
 
 const app = express();
 const port = Number(process.env.PORT) || 7002;
 
 app.use(express.json());
+app.use(cookieParser());
+
+app.use('/rest/onboardings', onboardingsRouter);
 
 app.get('/health', async (_req, res, next) => {
   try {
@@ -19,7 +28,10 @@ app.get('/health', async (_req, res, next) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({
+    status: 'error',
+    message: 'Internal server error'
+  });
 });
 
 app.listen(port, () => {

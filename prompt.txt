@@ -2,4 +2,27 @@ Set up an Express.js (JavaScript, no TypeScript) project for a reimbursements ba
 Port must be 7002. 
 Use pg (node-postgres) to connect to a PostgreSQL database via a DATABASE_URL env variable. 
 Create migration files that set up two tables: (1) users with columns: id (uuid, primary key, default gen_random_uuid()), name (text), email (text unique), password (text), role (text, default 'EMP'), rm_id (uuid nullable, FK to users.id). (2) reimbursements with columns: id (uuid pk), emp_id (uuid FK to users.id), title (text), description (text), amount (numeric), rm_approved (boolean default false), ape_approved (boolean default false), status (text default 'PENDING'), created_at (timestamptz default now()). 
-Also create a seed file that inserts the CFO user: email=cfo@org.com, password=CFO#ORG@April2026 (bcrypt hashed), role='CFO'. Expose scripts in package.json: dev (nodemon src/index.js), db:migrate, db:seed-data."
+Also create a seed file that inserts the CFO user: email=cfo@org.com, password=CFO#ORG@April2026 (bcrypt hashed), role='CFO'. Expose scripts in package.json: dev (nodemon src/index.js), db:migrate, db:seed-data.
+
+--------Promt2---------------
+
+Add cookie-based authentication to the Express app. 
+Implement three endpoints under /rest/onboardings: POST /register (accepts name, email, password; validates email ends with @org.com; 
+hashes password with bcrypt; 
+inserts user with role EMP; 
+returns success JSON), 
+POST /login (validates email domain; checks password; 
+sets an httpOnly cookie with a JWT containing userId and role), 
+POST /logout (clears the auth cookie). 
+Create an authenticate middleware that reads the JWT from the cookie and attaches user to req. 
+All response errors should return appropriate HTTP status codes with a JSON body containing a 'status: error' field and a message.
+
+
+---------Promt3-------------------
+
+Implement the following protected endpoints. 
+Use the authenticate middleware from before, and create a requireRole(...roles) middleware for authorization. 
+(1) POST /rest/roles/assign — CFO only; body: {userId, role}; updates the user's role in DB. 
+(2) GET /rest/employees — role-based visibility: RM sees only EMPs where rm_id = their own id; APE sees all users with role EMP or RM; CFO sees all users. EMP gets 403. Response shape: {status:'success', data:{users:[{userId, name, email, role}]}}. 
+(3) POST /rest/employees/assign — CFO only; body: {empId (the EMP's userId), rmId (the RM's userId)}; validates empId has role EMP and rmId has role RM; sets emp's rm_id = rmId. 
+(4) DELETE /rest/employees/assign — CFO only; same body; sets emp's rm_id = null.
